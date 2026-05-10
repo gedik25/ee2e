@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../core/socket_client.dart';
 import 'chat_screen.dart';
+import 'identity_screen.dart';
 
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({super.key});
@@ -87,6 +88,18 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   onPressed: _connect,
                   icon: const Icon(Icons.link),
                   label: const Text('Bağlan'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    final url = _serverCtrl.text.trim();
+                    if (url.isEmpty) return;
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => IdentityScreen(serverUrl: url),
+                    ));
+                  },
+                  icon: const Icon(Icons.vpn_key_outlined),
+                  label: const Text('Faz 2A — Anahtar Yönetimi'),
                 ),
               ],
             ),

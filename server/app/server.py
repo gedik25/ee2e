@@ -22,6 +22,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
+from .api_keys import bp as keys_bp
 from .ephemeral_queue import EphemeralQueue
 from .logging_config import configure_logging
 
@@ -59,7 +60,9 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "dev-only-change-me")
     app.config["JSON_SORT_KEYS"] = False
+    app.config["MAX_CONTENT_LENGTH"] = 32 * 1024  # 32 KB; bundle ~5 KB
     web_dir = os.environ.get("WEB_DIR", "/app/static-web")
+    app.register_blueprint(keys_bp)
 
     cors_origins = os.environ.get("CORS_ORIGINS", "*")
     if cors_origins != "*":
@@ -87,7 +90,7 @@ def create_app() -> Flask:
 
     @app.get("/<path:path>")
     def web_app(path: str) -> Any:
-        if path.startswith("socket.io"):
+        if path.startswith("socket.io") or path.startswith("api/"):
             return jsonify({"error": "not_found"}), 404
         file_path = os.path.join(web_dir, path)
         if os.path.exists(file_path) and os.path.isfile(file_path):

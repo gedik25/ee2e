@@ -4,12 +4,13 @@
 
 | Faz | Ad                                  | Durum         | Hedef Çıktı                                              |
 |-----|-------------------------------------|---------------|----------------------------------------------------------|
-| 0   | Hazırlık & Mimari Dokümantasyonu   | ✅ Tamamlandı  | `ARCHITECTURE.md`, `PHASES.md`, repo iskeleti           |
-| 1   | Altyapı + Dockerize Backend         | ✅ Tamamlandı  | macOS↔Chrome local + ngrok üzerinden uzak istemci ile mesajlaşma doğrulandı |
-| 2   | Identity & Key Management           | ⬜ Beklemede  | X3DH handshake çalışır                                  |
-| 3   | 1:1 E2EE Mesajlaşma                 | ⬜ Beklemede  | Gerçek şifreli mesaj gidip gelsin                       |
-| 4   | Grup + Metadata Hardening           | ⬜ Beklemede  | Sender Keys + Padding + Sealed Sender                   |
-| 5   | MLS + Platform Optimizasyonları     | ⬜ Beklemede  | TreeKEM grup, push bildirim, multi-platform             |
+| 0    | Hazırlık & Mimari Dokümantasyonu  | ✅ Tamamlandı   | `ARCHITECTURE.md`, `PHASES.md`, repo iskeleti           |
+| 1    | Altyapı + Dockerize Backend        | ✅ Tamamlandı   | macOS↔Chrome local + ngrok üzerinden uzak istemci ile mesajlaşma doğrulandı |
+| 2A   | Key Bundle Infrastructure          | ✅ Tamamlandı   | Cihazda key üretimi + sunucuda public bundle dağıtımı + atomik OPK tüketimi |
+| 2B   | X3DH Handshake                     | ⬜ Beklemede    | Alice ↔ Bob aynı `SK` türetir; safety number / fingerprint MVP |
+| 3    | 1:1 E2EE Mesajlaşma                | ⬜ Beklemede    | Double Ratchet + AES-256-GCM, gerçek şifreli mesaj      |
+| 4    | Grup + Metadata Hardening          | ⬜ Beklemede    | Sender Keys + Padding + Sealed Sender                   |
+| 5    | MLS + Platform Optimizasyonları    | ⬜ Beklemede    | TreeKEM grup, push bildirim, multi-platform             |
 
 ---
 
@@ -109,11 +110,94 @@
 
 ---
 
-## Faz 2 — Identity & Key Management (özet)
+## Faz 2 — Identity & Key Management
 
-**Hedef:** İki istemci hiç önceden konuşmamış olsa bile X3DH üzerinden ortak gizli (SK) türetebilsin.
+> Faz 2 iki alt faza bölündü. **2A** "anahtar dağıtım altyapısı"nı, **2B** "X3DH handshake"i kurar. Bu sayede kripto kodu tek başına izole test edilebilir, bug'lar dağılmaz.
 
-Detayları Faz 1 bittikten sonra açacağız.
+### Kripto Kararları (Sabitlenmiş)
+
+| Karar | Değer | Gerekçe |
+|---|---|---|
+| Identity DH key | **X25519** | DH için optimum; Signal standardı |
+| Identity sign key | **Ed25519** | İmza için ayrı tutuluyor (eğitim/test kolaylığı) |
+| Signed prekey | **X25519**, Ed25519 ile imzalanır | SPK rotation'da imza yenilenir |
+| One-Time prekey | **X25519** | Tek kullanımlık, kullanılınca silinir |
+| KDF | **HKDF-SHA-256** | X3DH'nin standart çıktı türetici |
+| Symmetric AEAD (Faz 3) | **AES-256-GCM** | Donanım hızlandırması yaygın |
+| OPK havuz boyutu | **100** | Signal pratik standardı |
+| OPK fallback | **SPK-only** (DH4 atlanır) | Faz 0'da karara bağlandı |
+| Wire format | **JSON** + base64url public key'ler | Faz 2'de okunabilirlik > performans |
+
+---
+
+## Faz 2A — Key Bundle Infrastructure
+
+> **Tek cümlelik hedef:** *"İki istemci de cihazda kendi anahtarlarını üretir, public bundle'larını sunucuya yükler; karşı taraf bundle'ı çekebilir, OPK atomik olarak tüketilir."*
+
+### Başarı Kriteri
+
+- [x] `Identity` üretici: IK_dh (X25519) + IK_sig (Ed25519) + SPK (X25519, IK_sig ile imzalı) + 100 OPK (X25519)
+- [x] Private key'ler `flutter_secure_storage`'da, plaintext disk'e ASLA yazılmaz
+- [x] `POST /api/v1/keys/bundle` — public bundle'ı yükler (private key alanı reddedilir)
+- [x] `GET /api/v1/keys/bundle/{user_id}` — bundle döner; OPK havuzunda anahtar varsa biri **atomik** olarak tüketilir + DB'den silinir
+- [x] OPK havuzu boşsa fallback: bundle döner ama `one_time_prekey: null` (SPK-only mode)
+- [x] Idempotent upload: aynı kullanıcı tekrar upload yaparsa SPK ve OPK güncellenir (key rotation)
+- [x] SPK signature istemci tarafından IK_sig ile doğrulanabilir (test bunu kontrol eder)
+- [x] Sunucu logları: hiçbir private key field'ı görmez (yoksa zaten reddedilir)
+- [x] pytest: **11 yeni test** (upload happy path, fetch consume, atomic distribution, SPK-only fallback, idempotent reupload, 404, forbidden private fields, bad handle, bad length, duplicate opk_id, stats endpoint)
+
+### İş Kırılım Yapısı
+
+#### Server
+- [x] `app/db.py` — psycopg connection helper (transaction context manager)
+- [x] `app/keys_repo.py` — `upsert_bundle()`, `fetch_bundle_consuming_opk()` (FOR UPDATE SKIP LOCKED), `opk_count()`, `delete_user()`
+- [x] `app/api_keys.py` — Blueprint, validation (handle regex, b64u length 32/64, forbidden private_/secret/_priv field reddi)
+- [x] `app/server.py` — blueprint mount, MAX_CONTENT_LENGTH 32 KB
+- [x] `tests/test_keys_api.py` — 11 test, hepsi yeşil
+
+#### Client
+- [x] `pubspec.yaml` — `cryptography: ^2.7.0`, `http: ^1.2.2`
+- [x] `lib/crypto/codec.dart` — base64url encode/decode (padding'siz)
+- [x] `lib/crypto/identity.dart` — `Identity` (X25519+Ed25519), `SignedPreKey`, `OneTimePreKey`, `PublicKeyBundle`, `FetchedBundle.verifySpkSignature()`
+- [x] `lib/storage/secure_keys.dart` — flutter_secure_storage wrapper (identity + spk + opk havuzu, atomik OPK tüketimi)
+- [x] `lib/core/keys_api.dart` — `uploadBundle()`, `fetchBundle(handle)`, `opkCount(handle)`
+- [x] `lib/ui/identity_screen.dart` — Üret + Yükle + Karşı tarafı çek + İmza doğrula + Wipe; web uyarı banner'ı
+- [x] `test/identity_test.dart` — 12 test: B64u, key generation, sign/verify (happy + tampered + wrong key), 100 OPK uniqueness, JSON schema, FetchedBundle parse (with/without OPK), X25519 ECDH wiring
+
+#### Güvenlik
+- [x] Server: bundle upload schema validator — sadece beklenen field'lar, byte length limits
+- [x] Server: payload başına max boyut (bundle ~ 5KB; rate-limit `flask-limiter` zaten 200/min)
+- [x] Client: SPK signature **indirme sonrası verify** (UI'da büyük ✅/❌ gösterilir)
+- [x] Server: `forbidden_field` (private_*, *_priv, secret*) recursive reddedilir
+- [x] End-to-end smoke: HTTP upload → atomic OPK consume → SPK-only fallback → 404 unknown
+
+### Riskler
+
+| Risk | Azaltım |
+|---|---|
+| Web'de `flutter_secure_storage` IndexedDB tabanlı, gerçek secure değil | "Web = demo only" notu UI'da, prod web'de kullanıcıyı uyar |
+| OPK race condition (iki Alice aynı anda fetch) | DB transaction `FOR UPDATE SKIP LOCKED` ile atomik consume |
+| `cryptography` Dart paketi web'de native crypto API kullanmaz | Test ortamında pure-Dart fallback yeterli; prod için `webcrypto` köprüsü Faz 3'te |
+
+---
+
+## Faz 2B — X3DH Handshake (Faz 2A'dan sonra)
+
+> **Tek cümlelik hedef:** *"Alice, Bob'un bundle'ını indirir, X3DH ile `SK` türetir; Bob aynı `SK`'yı bağımsız hesaplar; eşitlik test ile doğrulanır."*
+
+### Başarı Kriteri
+
+- [ ] `lib/crypto/x3dh.dart` — `deriveAsInitiator()`, `deriveAsResponder()`
+- [ ] `lib/crypto/x3dh_header.dart` — initial message header (sender_ik, sender_ek, recipient_spk_id, recipient_opk_id)
+- [ ] Birim test: `SK_alice == SK_bob` (her iki yönden)
+- [ ] Birim test: SPK-only fallback durumunda da SK eşitliği
+- [ ] Birim test: SPK signature geçersizse `deriveAsInitiator()` exception fırlatır
+- [ ] `lib/ui/safety_number_screen.dart` — fingerprint görüntüle (SHA-256(IK_a || IK_b)); MVP yeterli
+
+### Kapsam Dışı (Faz 3'e bırakıldı)
+- Mesaj şifreleme (Faz 3 Double Ratchet)
+- Multi-device (Faz 3 Sesame)
+- Yedekleme (Faz 5)
 
 ---
 
