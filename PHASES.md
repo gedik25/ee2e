@@ -5,7 +5,7 @@
 | Faz | Ad                                  | Durum         | Hedef Çıktı                                              |
 |-----|-------------------------------------|---------------|----------------------------------------------------------|
 | 0   | Hazırlık & Mimari Dokümantasyonu   | ✅ Tamamlandı  | `ARCHITECTURE.md`, `PHASES.md`, repo iskeleti           |
-| 1   | Altyapı + Dockerize Backend         | 🔨 Devam ediyor | Backend + DevOps tamam; Güvenlik sertleştirme + Flutter scaffold kaldı |
+| 1   | Altyapı + Dockerize Backend         | ✅ Tamamlandı  | macOS↔Chrome local + ngrok üzerinden uzak istemci ile mesajlaşma doğrulandı |
 | 2   | Identity & Key Management           | ⬜ Beklemede  | X3DH handshake çalışır                                  |
 | 3   | 1:1 E2EE Mesajlaşma                 | ⬜ Beklemede  | Gerçek şifreli mesaj gidip gelsin                       |
 | 4   | Grup + Metadata Hardening           | ⬜ Beklemede  | Sender Keys + Padding + Sealed Sender                   |
@@ -86,11 +86,26 @@
 | In-memory queue restart'ta veri kaybı     | Yüksek   | Düşük  | Faz 1 zaten "best-effort" — kabul edilebilir|
 | Mesaj loglara sızar                       | Orta     | Yüksek | Custom logging filter + smoke test          |
 
-### Retrospektif (Faz sonunda doldurulacak)
+### Retrospektif
 
-- **Ne iyi gitti:**
-- **Ne kötü gitti:**
-- **Faz 2'ye taşınacak teknik borç:**
+**Ne iyi gitti:**
+- 3 katmanlı mimari (istemci / iletişim / sunucu) baştan net çizildi → bug fix'ler hep doğru katmanda kaldı.
+- Zero-log policy başından beri SafeJSONFormatter ile zorunlandı; ngrok üzerinden gerçek mesajlar geçti, loglar temiz.
+- Pytest entegrasyon testleri (20/20) gerçek hatayı bulduğu yer oldu: client_msg_id eşleşmemesi, sandbox engeli vs. test öncesi kod review'da fark edilmemişti.
+
+**Ne kötü gitti:**
+- macOS Sandbox `network.client` izni atlanmıştı → "Bağlantı başarısız" → debug kayboldu, 1 saat kaybı.
+- 5000 portu (AirPlay Receiver) çakışması → 5050'ye taşımak gerekti.
+- Dockerfile `pip install --user` ile builder→runtime kopyalama yapıyordu ama appuser HOME farklıydı → `ModuleNotFoundError`. `PYTHONUSERBASE` ile çözüldü.
+- Flutter web ngrok'tan ayrı serve edilmek istendi ama tek tünel daha pratik çıktı → backend Flutter web'i de servis ediyor.
+- Sender'ın local-id'si server'ın UUID'si ile eşleşmiyordu → ✓✓ animasyonu çalışmıyordu. `client_msg_id` round-trip ile çözüldü.
+
+**Faz 2'ye taşınacak teknik borç:**
+- Auth: `client_id` query param ile basit auth — Faz 2'de IK signature ile değiştirilmeli.
+- Ephemeral queue: in-memory, restart'ta veri kaybı. Faz 3'te Redis.
+- Multi-tab dedup: Aynı kullanıcı iki sekmede açarsa room broadcast iki cihaza da gider — Faz 3 multi-device tasarımıyla beraber netleşecek.
+- Web build production-grade değil: `flutter build web --release` kullanılıyor ama service worker yok, asset cache stratejisi yok.
+- Reconnect logic agresif: `_disposed` guard eklendi ama race condition'lar tam test edilmedi.
 
 ---
 
