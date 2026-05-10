@@ -13,7 +13,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ee2e:${POSTGRES_PASSWORD}@db:5432/ee2e
     ports:
-      - "5000:5000"
+      - "5050:5000"
     networks:
       - ee2e-net
     depends_on:

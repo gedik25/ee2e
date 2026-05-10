@@ -17,6 +17,8 @@ WORKDIR /app
 
 COPY --from=builder /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH \
+    PYTHONUSERBASE=/home/appuser/.local \
+    PYTHONPATH=/home/appuser/.local/lib/python3.12/site-packages \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
