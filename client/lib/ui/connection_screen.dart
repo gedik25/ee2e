@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/socket_client.dart';
@@ -12,12 +13,13 @@ class ConnectionScreen extends StatefulWidget {
 }
 
 class _ConnectionScreenState extends State<ConnectionScreen> {
-  final _serverCtrl = TextEditingController(text: 'http://10.0.2.2:5000');
+  final _serverCtrl = TextEditingController();
   final _clientIdCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _serverCtrl.text = kIsWeb ? Uri.base.origin : 'http://localhost:5050';
     _clientIdCtrl.text = const Uuid().v4().substring(0, 8);
   }
 

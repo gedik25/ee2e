@@ -17,7 +17,7 @@ import os
 from typing import Any
 
 import psycopg
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -26,6 +26,7 @@ from .ephemeral_queue import EphemeralQueue
 from .logging_config import configure_logging
 
 log = logging.getLogger("ee2e.server")
+WEB_INDEX = "index.html"
 
 socketio = SocketIO(
     cors_allowed_origins="*",
@@ -58,6 +59,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET", "dev-only-change-me")
     app.config["JSON_SORT_KEYS"] = False
+    web_dir = os.environ.get("WEB_DIR", "/app/static-web")
 
     cors_origins = os.environ.get("CORS_ORIGINS", "*")
     if cors_origins != "*":
@@ -78,7 +80,22 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> Any:
+        index_path = os.path.join(web_dir, WEB_INDEX)
+        if os.path.exists(index_path):
+            return send_from_directory(web_dir, WEB_INDEX)
         return jsonify({"service": "ee2e", "phase": 1, "msg": "Hello, encrypted world."})
+
+    @app.get("/<path:path>")
+    def web_app(path: str) -> Any:
+        if path.startswith("socket.io"):
+            return jsonify({"error": "not_found"}), 404
+        file_path = os.path.join(web_dir, path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return send_from_directory(web_dir, path)
+        index_path = os.path.join(web_dir, WEB_INDEX)
+        if os.path.exists(index_path):
+            return send_from_directory(web_dir, WEB_INDEX)
+        return jsonify({"error": "not_found"}), 404
 
     socketio.init_app(app)
     _register_socket_handlers()
@@ -134,6 +151,7 @@ def _register_socket_handlers() -> None:
         recipient = data.get("recipient_id")
         sender = data.get("sender_id")
         envelope = data.get("envelope")
+        client_msg_id = data.get("client_msg_id")
         if not (isinstance(recipient, str) and isinstance(sender, str)
                 and isinstance(envelope, dict)):
             emit("error", {"code": "bad_payload"})
@@ -148,7 +166,10 @@ def _register_socket_handlers() -> None:
         relay["msg_id"] = msg_id
 
         emit("message:recv", relay, to=recipient)
-        emit("message:queued", {"msg_id": msg_id, "recipient_id": recipient})
+        ack_payload: dict[str, Any] = {"msg_id": msg_id, "recipient_id": recipient}
+        if isinstance(client_msg_id, str):
+            ack_payload["client_msg_id"] = client_msg_id
+        emit("message:queued", ack_payload)
         log.info(
             "relayed",
             extra={"extra": {"msg_id": msg_id, "from": sender, "to": recipient}},

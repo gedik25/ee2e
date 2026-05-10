@@ -41,6 +41,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   ConnectionStatus _status = ConnectionStatus.connecting;
   final List<_ChatMessage> _messages = [];
+  final Set<String> _seenIncoming = <String>{};
+  final Set<String> _seenAcks = <String>{};
 
   late StreamSubscription _statusSub;
   late StreamSubscription _msgSub;
@@ -57,6 +59,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onIncoming(IncomingMessage incoming) {
+    if (incoming.msgId.isNotEmpty && !_seenIncoming.add(incoming.msgId)) {
+      return;
+    }
     final body = incoming.envelope['body'];
     final text = body is String ? body : '<binary ${incoming.envelope.length}b>';
     setState(() {
@@ -77,7 +82,26 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onAck(MessageAck ack) {
-    final idx = _messages.indexWhere((m) => m.id == ack.msgId);
+    int idx = -1;
+    if (ack.kind == AckKind.queued && ack.clientMsgId != null) {
+      idx = _messages.indexWhere((m) => m.id == ack.clientMsgId);
+      if (idx != -1) {
+        setState(() {
+          _messages[idx] = _ChatMessage(
+            id: ack.msgId,
+            text: _messages[idx].text,
+            isMine: _messages[idx].isMine,
+            peerId: _messages[idx].peerId,
+            timestamp: _messages[idx].timestamp,
+            state: MessageState.sent,
+          );
+        });
+        return;
+      }
+    }
+    final ackKey = '${ack.kind.name}:${ack.msgId}';
+    if (!_seenAcks.add(ackKey)) return;
+    idx = _messages.indexWhere((m) => m.id == ack.msgId);
     if (idx == -1) return;
     setState(() {
       _messages[idx].state = ack.kind == AckKind.delivered
@@ -106,14 +130,8 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.client.sendMessage(
         recipientId: peer,
         envelope: {'body': text},
+        clientMsgId: tempId,
       );
-      Future<void>.delayed(const Duration(milliseconds: 50), () {
-        if (!mounted) return;
-        final i = _messages.indexWhere((m) => m.id == tempId);
-        if (i != -1) {
-          setState(() => _messages[i].state = MessageState.sent);
-        }
-      });
     } catch (_) {
       final i = _messages.indexWhere((m) => m.id == tempId);
       if (i != -1) {

@@ -12,6 +12,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql://ee2e:${POSTGRES_PASSWORD}@db:5432/ee2e
+      WEB_DIR: /app/static-web
     ports:
       - "5050:5000"
     networks:
@@ -22,6 +23,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - ../client/build/web:/app/static-web:ro
     cap_drop:
       - ALL
     security_opt:

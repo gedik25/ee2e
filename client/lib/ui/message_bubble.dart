@@ -63,7 +63,10 @@ class MessageBubble extends StatelessWidget {
                 children: [
                   Text(
                     _fmtTime(timestamp),
-                    style: TextStyle(color: fg.withOpacity(0.6), fontSize: 11),
+                    style: TextStyle(
+                      color: fg.withValues(alpha: 0.6),
+                      fontSize: 11,
+                    ),
                   ),
                   if (isMine) ...[
                     const SizedBox(width: 6),
@@ -72,7 +75,7 @@ class MessageBubble extends StatelessWidget {
                       style: TextStyle(
                         color: state == MessageState.delivered
                             ? Colors.lightBlueAccent
-                            : fg.withOpacity(0.6),
+                            : fg.withValues(alpha: 0.6),
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),

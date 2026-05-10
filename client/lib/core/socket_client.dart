@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'connection_status.dart';
 
@@ -15,7 +15,7 @@ class SocketClient {
   final String serverUrl;
   final String clientId;
 
-  IO.Socket? _socket;
+  io.Socket? _socket;
 
   final _statusController = StreamController<ConnectionStatus>.broadcast();
   final _messageController = StreamController<IncomingMessage>.broadcast();
@@ -27,21 +27,33 @@ class SocketClient {
 
   ConnectionStatus _status = ConnectionStatus.offline;
   ConnectionStatus get status => _status;
+  bool _disposed = false;
 
   void _setStatus(ConnectionStatus s) {
+    if (_disposed || _statusController.isClosed) return;
     _status = s;
     _statusController.add(s);
   }
 
+  void _emitMessage(IncomingMessage m) {
+    if (_disposed || _messageController.isClosed) return;
+    _messageController.add(m);
+  }
+
+  void _emitAck(MessageAck a) {
+    if (_disposed || _ackController.isClosed) return;
+    _ackController.add(a);
+  }
+
   void connect() {
-    if (_socket != null) return;
+    if (_socket != null || _disposed) return;
 
     _setStatus(ConnectionStatus.connecting);
 
-    final socket = IO.io(
+    final socket = io.io(
       serverUrl,
-      IO.OptionBuilder()
-          .setTransports(['websocket'])
+      io.OptionBuilder()
+          .setTransports(['websocket', 'polling'])
           .disableAutoConnect()
           .setAuth({'client_id': clientId})
           .setReconnectionAttempts(10)
@@ -51,29 +63,47 @@ class SocketClient {
     );
 
     socket
-      ..onConnect((_) => _setStatus(ConnectionStatus.online))
-      ..onDisconnect((_) => _setStatus(ConnectionStatus.offline))
-      ..onConnectError((_) => _setStatus(ConnectionStatus.failed))
+      ..onConnect((_) {
+        // ignore: avoid_print
+        print('[SocketClient] connected to $serverUrl as $clientId');
+        _setStatus(ConnectionStatus.online);
+      })
+      ..onDisconnect((_) {
+        // ignore: avoid_print
+        print('[SocketClient] disconnected');
+        _setStatus(ConnectionStatus.offline);
+      })
+      ..onConnectError((err) {
+        // ignore: avoid_print
+        print('[SocketClient] connect_error: $err');
+        _setStatus(ConnectionStatus.failed);
+      })
+      ..onError((err) {
+        // ignore: avoid_print
+        print('[SocketClient] error: $err');
+      })
       ..onReconnectAttempt((_) => _setStatus(ConnectionStatus.reconnecting))
       ..onReconnectFailed((_) => _setStatus(ConnectionStatus.failed))
       ..on('message:recv', (data) {
         if (data is Map) {
-          _messageController.add(IncomingMessage.fromJson(
+          _emitMessage(IncomingMessage.fromJson(
             Map<String, dynamic>.from(data),
           ));
         }
       })
       ..on('message:queued', (data) {
         if (data is Map && data['msg_id'] is String) {
-          _ackController.add(MessageAck(
+          final clientMsgId = data['client_msg_id'];
+          _emitAck(MessageAck(
             msgId: data['msg_id'] as String,
+            clientMsgId: clientMsgId is String ? clientMsgId : null,
             kind: AckKind.queued,
           ));
         }
       })
       ..on('message:ack', (data) {
         if (data is Map && data['msg_id'] is String) {
-          _ackController.add(MessageAck(
+          _emitAck(MessageAck(
             msgId: data['msg_id'] as String,
             kind: AckKind.delivered,
           ));
@@ -87,16 +117,21 @@ class SocketClient {
   void sendMessage({
     required String recipientId,
     required Map<String, dynamic> envelope,
+    String? clientMsgId,
   }) {
     final s = _socket;
     if (s == null || !s.connected) {
       throw StateError('Socket not connected');
     }
-    s.emit('message:send', {
+    final payload = <String, dynamic>{
       'sender_id': clientId,
       'recipient_id': recipientId,
       'envelope': envelope,
-    });
+    };
+    if (clientMsgId != null) {
+      payload['client_msg_id'] = clientMsgId;
+    }
+    s.emit('message:send', payload);
   }
 
   void acknowledgeDelivery({required String msgId, required String senderId}) {
@@ -109,9 +144,17 @@ class SocketClient {
   }
 
   Future<void> dispose() async {
-    _socket?.dispose();
+    if (_disposed) return;
+    _disposed = true;
+    final s = _socket;
     _socket = null;
-    _setStatus(ConnectionStatus.offline);
+    if (s != null) {
+      try {
+        s.clearListeners();
+        s.disconnect();
+        s.dispose();
+      } catch (_) {}
+    }
     await _statusController.close();
     await _messageController.close();
     await _ackController.close();
@@ -141,7 +184,8 @@ class IncomingMessage {
 enum AckKind { queued, delivered }
 
 class MessageAck {
-  MessageAck({required this.msgId, required this.kind});
+  MessageAck({required this.msgId, required this.kind, this.clientMsgId});
   final String msgId;
+  final String? clientMsgId;
   final AckKind kind;
 }
