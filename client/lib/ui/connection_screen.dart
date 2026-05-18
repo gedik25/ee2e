@@ -3,7 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/socket_client.dart';
+import '../storage/secure_keys.dart';
 import 'chat_screen.dart';
+import 'e2e_chat_screen.dart';
 import 'identity_screen.dart';
 
 class ConnectionScreen extends StatefulWidget {
@@ -20,8 +22,21 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   @override
   void initState() {
     super.initState();
+    // Web'de uygulamanın kendi origin'ini kullan (localhost:5050 üzerinden açıldığında otomatik)
+    // Diğer platformlarda sabit localhost:5050
     _serverCtrl.text = kIsWeb ? Uri.base.origin : 'http://localhost:5050';
     _clientIdCtrl.text = const Uuid().v4().substring(0, 8);
+    _loadSavedHandle();
+  }
+
+  Future<void> _loadSavedHandle() async {
+    final store = SecureKeyStore();
+    final identity = await store.loadIdentity();
+    if (identity != null && mounted) {
+      setState(() {
+        _clientIdCtrl.text = identity.handle;
+      });
+    }
   }
 
   @override
@@ -41,6 +56,19 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ChatScreen(client: client),
+    ));
+  }
+
+  void _connectE2E() {
+    final server = _serverCtrl.text.trim();
+    final clientId = _clientIdCtrl.text.trim();
+    if (server.isEmpty || clientId.isEmpty) return;
+
+    final client = SocketClient(serverUrl: server, clientId: clientId);
+    client.connect();
+
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => E2EChatScreen(client: client, serverUrl: server),
     ));
   }
 
@@ -84,10 +112,18 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                // Faz 3: E2EE Sohbet (Ana buton)
                 FilledButton.icon(
+                  onPressed: _connectE2E,
+                  icon: const Icon(Icons.lock),
+                  label: const Text('Faz 3 — 🔐 Şifreli Sohbet Başlat'),
+                ),
+                const SizedBox(height: 8),
+                // Faz 1: Plaintext sohbet (test amaçlı)
+                OutlinedButton.icon(
                   onPressed: _connect,
                   icon: const Icon(Icons.link),
-                  label: const Text('Bağlan'),
+                  label: const Text('Faz 1 — Şifresiz Bağlan (Test)'),
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
