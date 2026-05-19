@@ -1,209 +1,131 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-import 'codec.dart';
 import 'identity.dart';
+import 'x3dh_header.dart';
 
-/// X3DH (Extended Triple Diffie-Hellman) Handshake implementasyonu.
-///
-/// Signal Protokolü spesifikasyonuna göre:
-///   https://signal.org/docs/specifications/x3dh/
-///
-/// Alice (başlatıcı): Bob'un bundle'ını alır → SK türetir → X3DH header gönderir.
-/// Bob  (yanıtlayıcı): Kendi private key'leriyle + Alice'in header'ıyla SK türetir.
-///
-/// Her iki taraf da aynı 32-byte SK'yı bağımsız hesaplar.
-/// SK, Faz 3'te Double Ratchet'in başlangıç root key'i olarak kullanılır.
-class X3DH {
+/// X3DH (Extended Triple Diffie-Hellman) Protokolü Gerçeklemesi
+class X3dh {
   static final _x25519 = Cryptography.instance.x25519();
-  static final _hkdf = Hkdf(
-    hmac: Hmac(Sha256()),
-    outputLength: 32,
-  );
 
-  /// X3DH bilgi string'i (HKDF info parametresi).
-  static final _info = Uint8List.fromList('EE2E X3DH v1'.codeUnits);
-
-  /// Alice (başlatıcı) tarafı: Bob'un bundle'ından SK ve X3DH header üretir.
-  ///
-  /// [identity]   : Alice'in uzun ömürlü kimlik anahtarı
-  /// [bobBundle]  : Bob'un sunucudan çekilen public bundle'ı
-  ///
-  /// **Önemli:** Bu metod çağrılmadan önce `bobBundle.verifySpkSignature()`
-  /// çağrılmış ve sonuç `true` olmalıdır.
-  static Future<X3DHResult> deriveAsInitiator({
-    required Identity identity,
-    required FetchedBundle bobBundle,
+  /// Alice (Initiator) Bob'un bundle'ını kullanarak X3DH yapar.
+  /// Geriye türetilen [SecretKey] ve Bob'a gönderilecek [X3dhHeader] döner.
+  static Future<({SecretKey sharedKey, X3dhHeader header})> deriveAsInitiator({
+    required Identity myIdentity,
+    required FetchedBundle peerBundle,
   }) async {
-    // 1. Ephemeral key pair (EK_A) üret
-    final ekPair = await _x25519.newKeyPair();
-    final ekPub = await ekPair.extractPublicKey();
+    // 1. SPK imzasını doğrula (Güvenlik Kalkanı)
+    final isValid = await peerBundle.verifySpkSignature();
+    if (!isValid) {
+      throw Exception('X3DH: Peer SPK signature is invalid!');
+    }
 
-    // 2. Bob'un public key'lerini SimplePublicKey'e dönüştür
-    final bobIK = SimplePublicKey(bobBundle.identityDhKey, type: KeyPairType.x25519);
-    final bobSPK = SimplePublicKey(bobBundle.signedPreKey, type: KeyPairType.x25519);
+    // 2. Yeni bir Ephemeral Key (EK_A) üret
+    final ekA = await _x25519.newKeyPair();
+    final ekAPublic = await ekA.extractPublicKey();
 
-    // 3. DH hesaplamaları (Signal X3DH spec §3.3)
-    //   DH1 = DH(IK_A, SPK_B)
-    //   DH2 = DH(EK_A, IK_B)
-    //   DH3 = DH(EK_A, SPK_B)
-    //   DH4 = DH(EK_A, OPK_B)  ← OPK varsa
-    final dh1 = await _dh(identity.dhKeyPair, bobSPK);
-    final dh2 = await _dh(ekPair, bobIK);
-    final dh3 = await _dh(ekPair, bobSPK);
+    // Peer public key'lerini hazırla
+    final spkB = SimplePublicKey(peerBundle.signedPreKey, type: KeyPairType.x25519);
+    final ikB = SimplePublicKey(peerBundle.identityDhKey, type: KeyPairType.x25519);
 
-    Uint8List? dh4;
+    // 3. DH adımları
+    // DH1 = DH(IK_A, SPK_B)
+    final dh1 = await _x25519.sharedSecretKey(keyPair: myIdentity.dhKeyPair, remotePublicKey: spkB);
+    // DH2 = DH(EK_A, IK_B)
+    final dh2 = await _x25519.sharedSecretKey(keyPair: ekA, remotePublicKey: ikB);
+    // DH3 = DH(EK_A, SPK_B)
+    final dh3 = await _x25519.sharedSecretKey(keyPair: ekA, remotePublicKey: spkB);
+
+    SecretKey? dh4;
     int? usedOpkId;
-    if (bobBundle.oneTimePreKey != null) {
-      final bobOPK = SimplePublicKey(
-        bobBundle.oneTimePreKey!.publicKey,
-        type: KeyPairType.x25519,
-      );
-      dh4 = await _dh(ekPair, bobOPK);
-      usedOpkId = bobBundle.oneTimePreKey!.opkId;
+    if (peerBundle.oneTimePreKey != null) {
+      final opkB = SimplePublicKey(peerBundle.oneTimePreKey!.publicKey, type: KeyPairType.x25519);
+      // DH4 = DH(EK_A, OPK_B)
+      dh4 = await _x25519.sharedSecretKey(keyPair: ekA, remotePublicKey: opkB);
+      usedOpkId = peerBundle.oneTimePreKey!.opkId;
     }
 
-    // 4. HKDF ile SK türet
-    final sk = await _kdf(dh1: dh1, dh2: dh2, dh3: dh3, dh4: dh4);
+    // 4. KDF ile SK türet
+    final km = await _concatSharedSecrets(dh1, dh2, dh3, dh4: dh4);
+    final sk = await _hkdf(km);
 
-    // 5. Alice'in public IK ve EK'ını al (Bob'a göndermek için)
-    final ikPub = await identity.dhKeyPair.extractPublicKey();
-
-    return X3DHResult(
-      sk: sk,
-      header: X3DHHeader(
-        senderIkPublic: Uint8List.fromList(ikPub.bytes),
-        senderEkPublic: Uint8List.fromList(ekPub.bytes),
-        recipientSpkId: bobBundle.signedPreKeyId,
-        recipientOpkId: usedOpkId,
-      ),
+    // 5. Header'ı oluştur
+    final header = X3dhHeader(
+      senderIk: await myIdentity.dhPublicBytes(),
+      senderEk: Uint8List.fromList(ekAPublic.bytes),
+      recipientSpkId: peerBundle.signedPreKeyId,
+      recipientOpkId: usedOpkId,
     );
+
+    return (sharedKey: sk, header: header);
   }
 
-  /// Bob (yanıtlayıcı) tarafı: Alice'in X3DH header'ından SK türetir.
-  ///
-  /// [identity]  : Bob'un kimliği
-  /// [spk]       : Bob'un Signed Pre-Key (header'daki spk_id ile eşleşmeli)
-  /// [opk]       : Bob'un kullanılan OPK'sı (null → SPK-only mode)
-  /// [header]    : Alice'in gönderdiği X3DH header'ı
-  static Future<Uint8List> deriveAsResponder({
-    required Identity identity,
-    required SignedPreKey spk,
-    required OneTimePreKey? opk,
-    required X3DHHeader header,
+  /// Bob (Responder) Alice'ten gelen header ve kendi anahtarlarıyla X3DH yapar.
+  static Future<SecretKey> deriveAsResponder({
+    required X3dhHeader header,
+    required Identity myIdentity,
+    required SimpleKeyPair mySignedPreKey,
+    SimpleKeyPair? myOneTimePreKey,
   }) async {
-    // Alice'in public key'lerini yükle
-    final aliceIK = SimplePublicKey(header.senderIkPublic, type: KeyPairType.x25519);
-    final aliceEK = SimplePublicKey(header.senderEkPublic, type: KeyPairType.x25519);
+    // Peer public key'lerini hazırla
+    final ikA = SimplePublicKey(header.senderIk, type: KeyPairType.x25519);
+    final ekA = SimplePublicKey(header.senderEk, type: KeyPairType.x25519);
 
-    // DH hesaplamaları (Alice'inkiyle simetrik, roller değişmiş)
-    //   DH1 = DH(SPK_B, IK_A)
-    //   DH2 = DH(IK_B, EK_A)
-    //   DH3 = DH(SPK_B, EK_A)
-    //   DH4 = DH(OPK_B, EK_A) ← OPK kullanıldıysa
-    final dh1 = await _dh(spk.keyPair, aliceIK);
-    final dh2 = await _dh(identity.dhKeyPair, aliceEK);
-    final dh3 = await _dh(spk.keyPair, aliceEK);
+    // 3. DH adımları (Bob'un perspektifi)
+    // DH1 = DH(SPK_B, IK_A)
+    final dh1 = await _x25519.sharedSecretKey(keyPair: mySignedPreKey, remotePublicKey: ikA);
+    // DH2 = DH(IK_B, EK_A)
+    final dh2 = await _x25519.sharedSecretKey(keyPair: myIdentity.dhKeyPair, remotePublicKey: ekA);
+    // DH3 = DH(SPK_B, EK_A)
+    final dh3 = await _x25519.sharedSecretKey(keyPair: mySignedPreKey, remotePublicKey: ekA);
 
-    Uint8List? dh4;
-    if (opk != null) {
-      dh4 = await _dh(opk.keyPair, aliceEK);
+    SecretKey? dh4;
+    if (header.recipientOpkId != null) {
+      if (myOneTimePreKey == null) {
+        throw Exception('X3DH: Alice used an OPK, but Bob did not provide it!');
+      }
+      // DH4 = DH(OPK_B, EK_A)
+      dh4 = await _x25519.sharedSecretKey(keyPair: myOneTimePreKey, remotePublicKey: ekA);
     }
 
-    return _kdf(dh1: dh1, dh2: dh2, dh3: dh3, dh4: dh4);
+    // 4. KDF ile SK türet
+    final km = await _concatSharedSecrets(dh1, dh2, dh3, dh4: dh4);
+    final sk = await _hkdf(km);
+
+    return sk;
   }
 
-  // ─── Yardımcı metodlar ───────────────────────────────────────────────────
-
-  /// X25519 DH — shared secret'ın raw bytes'ını döndürür.
-  static Future<Uint8List> _dh(
-    SimpleKeyPair localKp,
-    SimplePublicKey remotePub,
-  ) async {
-    final shared = await _x25519.sharedSecretKey(
-      keyPair: localKp,
-      remotePublicKey: remotePub,
-    );
-    return Uint8List.fromList(await shared.extractBytes());
-  }
-
-  /// HKDF-SHA-256 ile tüm DH çıktılarını birleştirip 32-byte SK üretir.
-  ///
-  /// Signal spec: salt = 0x00...00 (32 byte), ikm = DH1 || DH2 || DH3 [|| DH4]
-  static Future<Uint8List> _kdf({
-    required Uint8List dh1,
-    required Uint8List dh2,
-    required Uint8List dh3,
-    Uint8List? dh4,
+  static Future<List<int>> _concatSharedSecrets(
+    SecretKey dh1,
+    SecretKey dh2,
+    SecretKey dh3, {
+    SecretKey? dh4,
   }) async {
-    // IKM: DH çıktılarını sırayla birleştir
-    final ikmParts = [dh1, dh2, dh3, if (dh4 != null) dh4];
-    final totalLen = ikmParts.fold<int>(0, (sum, b) => sum + b.length);
-    final ikm = Uint8List(totalLen);
-    var offset = 0;
-    for (final part in ikmParts) {
-      ikm.setRange(offset, offset + part.length, part);
-      offset += part.length;
-    }
+    final b1 = await dh1.extractBytes();
+    final b2 = await dh2.extractBytes();
+    final b3 = await dh3.extractBytes();
+    final b4 = dh4 != null ? await dh4.extractBytes() : <int>[];
 
-    // Salt: 32 sıfır byte (Signal spec §3.3)
-    final saltBytes = Uint8List(32);
+    // Signal Spesifikasyonu: KM = F || DH1 || DH2 || DH3 || DH4
+    // F = 32 bytes of 0xFF
+    final f = List<int>.filled(32, 0xFF);
 
-    final derived = await _hkdf.deriveKey(
-      secretKey: SecretKey(ikm),
-      nonce: saltBytes,
-      info: _info,
-    );
-    return Uint8List.fromList(await derived.extractBytes());
+    return [...f, ...b1, ...b2, ...b3, ...b4];
   }
-}
 
-/// X3DH Handshake sonucu (Alice tarafı).
-class X3DHResult {
-  const X3DHResult({required this.sk, required this.header});
+  static Future<SecretKey> _hkdf(List<int> inputKeyMaterial) async {
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    // Salt: 32 bytes of zeros
+    final salt = List<int>.filled(32, 0);
+    final info = utf8.encode('EE2E_X3DH');
 
-  /// 32-byte Shared Secret — Double Ratchet'in root key'i olacak.
-  final Uint8List sk;
-
-  /// Bob'a iletilmesi gereken header (wire formatı için [X3DHHeader.toJson]).
-  final X3DHHeader header;
-}
-
-/// X3DH wire header: Alice → Bob (ilk mesajla birlikte gönderilir).
-class X3DHHeader {
-  const X3DHHeader({
-    required this.senderIkPublic,
-    required this.senderEkPublic,
-    required this.recipientSpkId,
-    this.recipientOpkId,
-  });
-
-  /// Alice'in IK_dh public key'i (32 byte, X25519)
-  final Uint8List senderIkPublic;
-
-  /// Alice'in tek kullanımlık EK public key'i (32 byte, X25519)
-  final Uint8List senderEkPublic;
-
-  /// Bob'un kullanılan SPK id'si
-  final int recipientSpkId;
-
-  /// Bob'un kullanılan OPK id'si (null → SPK-only mode)
-  final int? recipientOpkId;
-
-  Map<String, dynamic> toJson() => {
-        'sender_ik': B64u.encode(senderIkPublic),
-        'sender_ek': B64u.encode(senderEkPublic),
-        'recipient_spk_id': recipientSpkId,
-        if (recipientOpkId != null) 'recipient_opk_id': recipientOpkId,
-      };
-
-  factory X3DHHeader.fromJson(Map<String, dynamic> json) {
-    return X3DHHeader(
-      senderIkPublic: B64u.decode(json['sender_ik'] as String),
-      senderEkPublic: B64u.decode(json['sender_ek'] as String),
-      recipientSpkId: json['recipient_spk_id'] as int,
-      recipientOpkId: json['recipient_opk_id'] as int?,
+    final sk = await hkdf.deriveKey(
+      secretKey: SecretKey(inputKeyMaterial),
+      nonce: salt,
+      info: info,
     );
+    return sk;
   }
 }
