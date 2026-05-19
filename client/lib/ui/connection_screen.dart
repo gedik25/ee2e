@@ -3,9 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/socket_client.dart';
-import '../storage/secure_keys.dart';
-import 'chat_screen.dart';
-import 'e2e_chat_screen.dart';
+import 'dashboard_screen.dart';
 import 'identity_screen.dart';
 
 class ConnectionScreen extends StatefulWidget {
@@ -22,21 +20,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   @override
   void initState() {
     super.initState();
-    // Web'de uygulamanın kendi origin'ini kullan (localhost:5050 üzerinden açıldığında otomatik)
-    // Diğer platformlarda sabit localhost:5050
-    _serverCtrl.text = kIsWeb ? Uri.base.origin : 'http://localhost:5050';
+    _serverCtrl.text = 'http://localhost:5050';
     _clientIdCtrl.text = const Uuid().v4().substring(0, 8);
-    _loadSavedHandle();
-  }
-
-  Future<void> _loadSavedHandle() async {
-    final store = SecureKeyStore();
-    final identity = await store.loadIdentity();
-    if (identity != null && mounted) {
-      setState(() {
-        _clientIdCtrl.text = identity.handle;
-      });
-    }
   }
 
   @override
@@ -54,21 +39,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     final client = SocketClient(serverUrl: server, clientId: clientId);
     client.connect();
 
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ChatScreen(client: client),
-    ));
-  }
-
-  void _connectE2E() {
-    final server = _serverCtrl.text.trim();
-    final clientId = _clientIdCtrl.text.trim();
-    if (server.isEmpty || clientId.isEmpty) return;
-
-    final client = SocketClient(serverUrl: server, clientId: clientId);
-    client.connect();
-
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => E2EChatScreen(client: client, serverUrl: server),
+    Navigator.of(context).pushReplacement(MaterialPageRoute(
+      builder: (_) => DashboardScreen(client: client),
     ));
   }
 
@@ -79,18 +51,18 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Faz 1 — İletim Doğrulama',
+                  'Faz 3 — E2EE Mesajlaşma',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Bu ekran şifreleme öncesi iletim hattını test eder.',
+                  'X3DH + Double Ratchet (AES-256-GCM) ile uçtan uca şifreli 1:1 veya grup sohbeti.',
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 24),
@@ -112,19 +84,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                // Faz 3: E2EE Sohbet (Ana buton)
                 FilledButton.icon(
-                  onPressed: _connectE2E,
-                  icon: const Icon(Icons.lock),
-                  label: const Text('Faz 3 — 🔐 Şifreli Sohbet Başlat'),
+                  onPressed: _connect,
+                  icon: const Icon(Icons.login),
+                  label: const Text('Bağlan ve Sohbetlere Git'),
                 ),
                 const SizedBox(height: 8),
-                // Faz 1: Plaintext sohbet (test amaçlı)
-                OutlinedButton.icon(
-                  onPressed: _connect,
-                  icon: const Icon(Icons.link),
-                  label: const Text('Faz 1 — Şifresiz Bağlan (Test)'),
-                ),
+
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: () {
@@ -145,3 +111,4 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
     );
   }
 }
+

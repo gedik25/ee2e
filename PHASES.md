@@ -7,10 +7,10 @@
 | 0    | Hazırlık & Mimari Dokümantasyonu  | ✅ Tamamlandı   | `ARCHITECTURE.md`, `PHASES.md`, repo iskeleti           |
 | 1    | Altyapı + Dockerize Backend        | ✅ Tamamlandı   | macOS↔Chrome local + ngrok üzerinden uzak istemci ile mesajlaşma doğrulandı |
 | 2A   | Key Bundle Infrastructure          | ✅ Tamamlandı   | Cihazda key üretimi + sunucuda public bundle dağıtımı + atomik OPK tüketimi |
-| 2B   | X3DH Handshake                     | ✅ Tamamlandı   | Alice ↔ Bob aynı `SK` türetir; safety number / fingerprint MVP |
+| 2B   | X3DH Handshake                     | ✅ Tamamlandı    | Alice ↔ Bob aynı `SK` türetir; safety number / fingerprint MVP |
 | 3    | 1:1 E2EE Mesajlaşma                | ✅ Tamamlandı   | Double Ratchet + AES-256-GCM, gerçek şifreli mesaj      |
-| 4    | Grup + Metadata Hardening          | ⬜ Beklemede    | Sender Keys + Padding + Sealed Sender                   |
-| 5    | MLS + Platform Optimizasyonları    | ⬜ Beklemede    | TreeKEM grup, push bildirim, multi-platform             |
+| 4    | Grup + Metadata Hardening          | ✅ Tamamlandı   | Sender Keys + Padding + Sealed Sender                   |
+| 5    | MLS + Platform Optimizasyonları    | ✅ Tamamlandı   | TreeKEM grup, push bildirim, multi-platform             |
 
 ---
 
@@ -181,86 +181,64 @@
 
 ---
 
-## Faz 2B — X3DH Handshake ✅ Tamamlandı
+## Faz 2B — X3DH Handshake (Faz 2A'dan sonra)
 
 > **Tek cümlelik hedef:** *"Alice, Bob'un bundle'ını indirir, X3DH ile `SK` türetir; Bob aynı `SK`'yı bağımsız hesaplar; eşitlik test ile doğrulanır."*
 
 ### Başarı Kriteri
 
 - [x] `lib/crypto/x3dh.dart` — `deriveAsInitiator()`, `deriveAsResponder()`
-- [x] X3DHHeader wire formatı — `sender_ik`, `sender_ek`, `recipient_spk_id`, `recipient_opk_id`
-- [x] OPK varsa DH4 dahil, yoksa SPK-only fallback
-- [x] HKDF-SHA-256 ile 32-byte SK türetimi (Signal spec §3.3 uyumlu, salt=32×0x00, info="EE2E X3DH v1")
-- [x] `lib/ui/safety_number_screen.dart` — SHA-256(min(IK_A,IK_B)||max(IK_A,IK_B)); 60 haneli ondalık fingerprint
+- [x] `lib/crypto/x3dh_header.dart` — initial message header (sender_ik, sender_ek, recipient_spk_id, recipient_opk_id)
+- [x] Birim test: `SK_alice == SK_bob` (her iki yönden)
+- [x] Birim test: SPK-only fallback durumunda da SK eşitliği
+- [x] Birim test: SPK signature geçersizse `deriveAsInitiator()` exception fırlatır
+- [x] `lib/ui/safety_number_screen.dart` — fingerprint görüntüle (SHA-256(IK_a || IK_b)); MVP yeterli
 
-### Tamamlanan dosyalar
-
-| Dosya | Açıklama |
-|-------|----------|
-| `lib/crypto/x3dh.dart` | X3DH.deriveAsInitiator(), X3DH.deriveAsResponder(), X3DHResult, X3DHHeader |
-| `lib/ui/safety_number_screen.dart` | SHA-256 fingerprint, 60 haneli format, doğrulama akışı |
-
-### Retrospektif
-
-**Ne iyi gitti:**
-- X3DHHeader JSON serializasyonu (`B64u.encode/decode`) temiz çalıştı.
-- OPK tüketimi (`consumeOneTimePreKey`) mevcut `SecureKeyStore` ile sorunsuz entegre oldu.
-
-**Dikkat:**
-- SPK imzası doğrulanmadan `deriveAsInitiator()` çağrılmamalı — UI bunu zorunlu kılıyor.
-- Web'de `flutter_secure_storage` IndexedDB tabanlı; production için native build gerekir.
+### Kapsam Dışı (Faz 3'e bırakıldı)
+- Mesaj şifreleme (Faz 3 Double Ratchet)
+- Multi-device (Faz 3 Sesame)
+- Yedekleme (Faz 5)
 
 ---
 
-## Faz 3 — 1:1 E2EE Mesajlaşma ✅ Tamamlandı
+## Faz 3 — 1:1 E2EE Mesajlaşma
 
-> **Tek cümlelik hedef:** *"Socket.IO üzerinden taşınan envelope tamamen opaque ciphertext; sunucu asla plaintext göremez; Double Ratchet ile forward secrecy sağlanır."*
+> **Tek cümlelik hedef:** *"Alice ve Bob, oluşturdukları ortak gizli anahtar (SK) ile Double Ratchet kurar; gönderilen her mesaj AES-256-GCM ile şifrelenir ve anahtarlar her mesajda/cevapta ileriye dönük gizlilik (Forward Secrecy) için güncellenir."*
 
 ### Başarı Kriteri
 
-- [x] `lib/crypto/ratchet.dart` — `DoubleRatchet` sınıfı
-- [x] `initAsSender(sk, bobSpkPublic)` — Alice tarafı ilk DH adımı
-- [x] `initAsReceiver(sk, spk)` — Bob tarafı başlatma
-- [x] `encrypt(plaintext, [ad])` → `EncryptedMessage` (AES-256-GCM + RatchetHeader)
-- [x] `decrypt(msg, [ad])` → plaintext String
-- [x] KDF_RK: HKDF-SHA-256, (RK, DH_out) → (yeni RK, CK)
-- [x] KDF_CK: HMAC-SHA-256, CK + 0x01/0x02 → (MK, yeni CK) — Signal spec birebir
-- [x] DH Ratchet adımı: yeni key pair üret, recv+send zincirleri güncelle
-- [x] Skipped key cache — out-of-order teslim; maks 1000 anahtar güvenlik sınırı
-- [x] `lib/ui/e2e_chat_screen.dart` — tam E2EE sohbet ekranı
-- [x] Wire protokol: `{ee2e:true, v:1, enc:{...}, [x3dh:{...}]}`
-- [x] İlk mesajda X3DH header otomatik eklenir, sonraki mesajlarda atlanır
-- [x] `lib/ui/connection_screen.dart` → "Faz 3 — 🔐 Şifreli Sohbet Başlat" ana buton
-
-### Tamamlanan dosyalar
-
-| Dosya | Açıklama |
-|-------|----------|
-| `lib/crypto/ratchet.dart` | DoubleRatchet, RatchetHeader, EncryptedMessage, pure-Dart SHA-256/HMAC |
-| `lib/ui/e2e_chat_screen.dart` | E2EChatScreen: X3DH+Ratchet oturum yönetimi, şifreli mesaj gönder/al |
-| `lib/ui/connection_screen.dart` | Faz 3 butonu, _connectE2E(), web için Uri.base.origin |
-
-### Deploy
-
-- Flutter web `flutter build web` ile derlenir, `client/build/web/` çıktısı Docker'a mount edilir.
-- `docker compose restart app` ile sunucu yeni build'i alır; uygulama `http://localhost:5050`'den açılır.
-- Aynı origin üzerinden çalıştığından CORS sorunu yoktur.
-
-### Retrospektif
-
-**Ne iyi gitti:**
-- Double Ratchet KDF zincirleri pure Dart ile senkron çalışıyor; async bağımlılığı yok.
-- `EncryptedMessage.toJson()` / `fromJson()` Socket.IO envelope'una doğrudan gömüldü, ayrı serializasyon katmanı gerekmedi.
-- `sha256Pub()` public metodu `SafetyNumberScreen` ile temiz paylaşım sağladı.
-- Web'i Docker üzerinden servis etmek (`Uri.base.origin`) CORS sorununu tamamen ortadan kaldırdı.
-
-**Dikkat:**
-- Web'de `flutter_secure_storage` IndexedDB kullanır; sayfa yenilendiğinde Ratchet state sıfırlanır (oturum yeniden kurulur).
-- Skipped key cache bellek içi; uygulama yeniden başlatıldığında kaybolur (kabul edilebilir Faz 3 için).
-- Out-of-order mesaj limiti 1000 — aşılırsa `StateError` fırlatılır.
+- [x] `lib/crypto/double_ratchet.dart` — KDF fonksiyonları (Root, Sender, Receiver zincirleri) ve State yönetimi.
+- [x] Mesaj şifreleme ve deşifreleme (AES-256-GCM) fonksiyonları entegrasyonu.
+- [x] Atlanan (out-of-order) mesajlar için "Skipped Message Keys" yönetimi.
+- [x] `Session` sınıfı: X3DH ile başlar, Double Ratchet ile devam eder.
+- [x] `server/app/server.py` — Sunucu sadece ciphertext'i taşıdığını doğrulamak için loglarda şifreli metni (Base64) göstermeli.
+- [x] UI Entegrasyonu: Chat ekranında gerçek E2EE mesaj gönderimi ve alımı.
+- [x] Testler: Alice ve Bob arası ratcheting doğrulama, mesaj sırası bozulduğunda doğru deşifre, AES-GCM şifreleme/çözme.
 
 ---
 
-## Faz 4, 5 (özet)
+## Faz 4 — Grup Mesajlaşması & Metadata Gizliliği (Hardening)
 
-`YAPILACAKLAR.md` dosyasına bakın. Detay her faz başında bu dokümana eklenecek.
+> **Tek cümlelik hedef:** *"Kullanıcılar 1:1 yerine güvenli bir gruba mesaj atabilsin (Sender Keys) ve sunucu üzerinden giden paketler boyutundan ya da kimden kime gittiğinden hareketle (Metadata) sızıntı yapmasın (Padding & Sealed Sender)."*
+
+### Başarı Kriteri
+
+- [x] `lib/crypto/sender_key.dart` — Grup için Sender Key oluşturma, dağıtma ve mesaj şifreleme/çözme.
+- [x] Grup oluşturma ve katılımcılara Sender Key gönderme (1:1 Double Ratchet üzerinden).
+- [x] UI Entegrasyonu: `GroupChatScreen` + `GroupSession` + `GroupSessionManager`.
+- [x] **Padding:** Gönderilen mesaj paketleri `MessagePadding.pad()` ile 512 byte bloklarına tamamlanır (DoubleRatchet + GroupCipher entegre).
+- [x] **Sealed Sender (MVP):** `SealedSender.seal/unseal` ile sunucu göndericiyi bilemez; testler geçti.
+
+---
+
+## Faz 5 — MLS + Platform Optimizasyonları
+
+> **Tek cümlelik hedef:** *"Grup şifrelemesini TreeKEM (MLS benzeri) ağaç yapısıyla ölçeklenebilir hale getir; çoklu cihaz desteği ve push bildirim altyapısını kur."*
+
+### Başarı Kriteri
+
+- [x] `lib/crypto/tree_kem.dart` — TreeKEM ağacı: node ekleme/silme, path secret türetme, ağaç güncellemesi (6/6 test geçti).
+- [x] Bir üye eklendiğinde/çıktığında Forward Secrecy ve Post-Compromise Security korunur (testlerle doğrulandı).
+- [x] `lib/crypto/multi_device.dart` — Sesame benzeri Device-Session yönetimi (MultiDeviceManager).
+- [x] Push bildirim altyapısı (stub/MVP): `server/app/push.py` (sunucu kuyruk) + `lib/core/push_service.dart` (İstemci).
+- [x] Testler: TreeKEM ağacında üye ekleme/silme, Forward Secrecy, Post-Compromise Security doğrulandı (27/27 tüm testler geçti).

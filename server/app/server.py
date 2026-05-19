@@ -18,6 +18,7 @@ from typing import Any
 
 import psycopg
 from flask import Flask, jsonify, send_from_directory
+from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -66,7 +67,11 @@ def create_app() -> Flask:
 
     cors_origins = os.environ.get("CORS_ORIGINS", "*")
     if cors_origins != "*":
-        socketio.cors_allowed_origins = [o.strip() for o in cors_origins.split(",")]
+        origins_list = [o.strip() for o in cors_origins.split(",")]
+        socketio.cors_allowed_origins = origins_list
+        CORS(app, origins=origins_list)
+    else:
+        CORS(app)
 
     Limiter(
         get_remote_address,
