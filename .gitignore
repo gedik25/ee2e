@@ -38,3 +38,6 @@ logs/
 # Docker volumes
 postgres-data/
 redis-data/
+
+# Local drafts
+*drafts/

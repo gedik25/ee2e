@@ -55,10 +55,18 @@ def _make_client(client_id: str, url: str):
 
 def test_health_endpoint(server_url):
     import urllib.request
-    with urllib.request.urlopen(f"{server_url}/health", timeout=2) as r:
-        assert r.status in (200, 503)
-        body = json.loads(r.read())
-        assert "status" in body and "queued" in body
+    import urllib.error
+    try:
+        with urllib.request.urlopen(f"{server_url}/health", timeout=2) as r:
+            status = r.status
+            body_bytes = r.read()
+    except urllib.error.HTTPError as e:
+        status = e.code
+        body_bytes = e.read()
+
+    assert status in (200, 503)
+    body = json.loads(body_bytes)
+    assert "status" in body and "queued" in body
 
 
 def test_a_to_b_online_relay(server_url):
