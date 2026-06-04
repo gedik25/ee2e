@@ -2,7 +2,7 @@
 
 > Bu belge **şu an repoda çalışan** bileşenleri, veri akışlarını ve faz sınırlarını anlatır.  
 > Uzun vadeli hedef diyagramı ve faz-ötesi vizyon için `ARCHITECTURE.md`; faz tablosu ve DoD için `PHASES.md`; TLS, tehdit modeli ve güvenlik sütunları için `docs/` altındaki ilgili dosyalara bakın.  
-> **Son güncelleme:** Faz 0–1 ve **Faz 2A** tamamlandıktan sonra; Faz 2B ve sonrası burada “planlanan” olarak işaretlenir.
+> **Son güncelleme:** Tüm fazlar (Faz 0 - Faz 5) tamamlandıktan sonra.
 
 ---
 
@@ -28,8 +28,8 @@
 
 **EE2E**, uçtan uca şifreli mesajlaşmaya giden yol haritasıyla geliştirilen bir istemci–sunucu sistemidir.
 
-- **Bugün:** Gerçek zamanlı **Socket.IO** iletişimi (Faz 1), sunucuda **kalıcı mesaj tablosu yok**; çevrimdışı kullanıcı için **bellek içi** süreli kuyruk; Flutter ile **plaintext** sohbet doğrulaması; PostgreSQL’de **yalnızca public** anahtar materyali (Faz 2A); loglarda hassas alanların maskelenmesi.
-- **Henüz yok:** X3DH ile ortak gizli anahtar (Faz 2B), Double Ratchet ve şifreli mesaj gövdesi (Faz 3), grup/MLS (Faz 4–5).
+- **Bugün:** Gerçek zamanlı **Socket.IO** iletişimi (Faz 1), sunucuda **kalıcı mesaj tablosu yok**; çevrimdışı kullanıcı için **bellek içi** süreli kuyruk; PostgreSQL’de **yalnızca public** anahtar materyali (Faz 2A); **X3DH** ile ortak gizli anahtar (Faz 2B); **Double Ratchet + AES-256-GCM** 1:1 E2EE (Faz 3); **Sender Keys, Padding ve Sealed Sender** ile Grup Sohbeti (Faz 4); **TreeKEM (MLS)** ile ölçeklenebilir grup anahtarı yönetimi (Faz 5).
+- **Kısıtlar:** Üretim ortamı için Redis kuyruk, güçlü socket auth ve gerçek push sunucu bağlantıları planlanmaktadır.
 
 Sunucu tasarım felsefesi: **mesaj içeriğine güvenmemek** (opaque `envelope`), **private key kabul etmemek**, **mesajı DB’ye yazmamak**.
 
@@ -42,8 +42,10 @@ Sunucu tasarım felsefesi: **mesaj içeriğine güvenmemek** (opaque `envelope`)
 | 0 | Hazırlık & dokümantasyon | `ARCHITECTURE.md`, `PHASES.md`, `docs/*` |
 | 1 | Altyapı + iletim iskeleti | Docker, Flask-SocketIO, ephemeral queue, Flutter chat (şifresiz), `/health` |
 | 2A | Key bundle altyapısı | `POST/GET /api/v1/keys/bundle`, atomik OPK, `Identity` + `SecureKeyStore` + `IdentityScreen` |
-| 2B | X3DH | **Uygulanmadı** — ortak `SK`, ilk mesaj başlığı, safety number |
-| 3+ | E2EE mesaj, grup, MLS | **Uygulanmadı** — plan `PHASES.md` ve `ARCHITECTURE.md` içinde |
+| 2B | X3DH | Uygulandı — ortak `SK` üretimi, safety number / fingerprint |
+| 3 | 1:1 E2EE | Uygulandı — Double Ratchet + AES-256-GCM şifreleme, `ChatScreen` |
+| 4 | Grup & Hardening | Uygulandı — Sender Keys, Padding, Sealed Sender, `GroupChatScreen` |
+| 5 | MLS & Platform | Uygulandı — TreeKEM (ikili ağaç), Sesame (MultiDevice), Push API, Windows platform |
 
 ---
 
@@ -194,18 +196,19 @@ Sunucu `envelope` içeriğini doğrulamaz ve loglarda içerik politikası `SafeJ
 
 ## 9. Kriptografi (şu an ve plan)
 
-### Şu an (2A)
+### Şu an (Faz 5)
 
 - **Identity:** X25519 (`dhKeyPair`) + Ed25519 (`signKeyPair`)
 - **SPK:** X25519; public bytes üzerine Ed25519 imza (`SignedPreKey`)
 - **OPK:** X25519; sunucuda sadece public; istemcide private `SecureKeyStore` içinde
+- **X3DH:** `deriveAsInitiator()` ve `deriveAsResponder()` (HKDF-SHA-256 ile `SK` türetimi)
+- **Double Ratchet:** KDF_RK ve KDF_CK ile per-message anahtar rotasyonu, skipped keys cache
+- **AEAD:** AES-256-GCM şifreleme ve bütünlük doğrulaması
+- **Grup Sohbeti:** `SenderKey` state yönetimi, `GroupCipher` ile grup mesajı şifreleme/çözme
+- **Padding:** 512 byte bloklarına PKCS7 padding ile boyut analizi engelleme
+- **Sealed Sender:** Geçici anahtar (EK) ve alıcı IK'sı ile gönderici ID'sinin şifrelenmesi
+- **TreeKEM (MLS):** İkili ağaç yapısıyla O(log N) üye ekleme, silme ve path secret türetme
 - **Wire:** JSON + base64url (padding’siz)
-
-### Plan (belge / `PHASES.md` ile uyumlu)
-
-- **2B:** X3DH, HKDF-SHA-256, ephemeral key, ilk mesaj başlığı, safety number MVP
-- **3:** Double Ratchet, AES-256-GCM, opaque envelope
-- **4–5:** Grup sender keys / padding / sealed sender; MLS, push
 
 ---
 
@@ -229,11 +232,9 @@ Sunucu `envelope` içeriğini doğrulamaz ve loglarda içerik politikası `SafeJ
 
 ## 12. Bilinen sınırlar ve teknik borç
 
-- **Auth:** Socket.IO `client_id` — gerçek kimlik doğrulama / IK imzalı token yok (Faz 2B+ ile sıkılaştırılabilir).
-- **Kuyruk:** Process belleği — restart’ta kayıp; yatay ölçekte paylaşılmaz (Faz 3’te Redis hedefi).
-- **Mesaj:** Uçtan uca şifre yok; sunucu zarfı “görür” (opaque olsa da trafik analizi metadata sızdırabilir).
-- **Çok sekme / çok cihaz:** Aynı `client_id` ile fanout/dedup tam çözülmedi (Faz 3 multi-device planı).
-- **Web:** `flutter_secure_storage` web’de tam güvenli depolama değildir; üretim web için ek strateji gerekir.
+- **Auth:** Socket.IO `client_id` — gerçek kimlik doğrulama / IK imzalı token yok (kimlik doğrulama sıkılaştırması planlanmaktadır).
+- **Kuyruk:** Process belleği — sunucu yeniden başlatıldığında veri kaybı; yatay ölçekleme yok (Redis entegrasyonu planlanmaktadır).
+- **Web:** `flutter_secure_storage` web’de IndexedDB kullanır ve tam donanımsal güvenlik sağlamaz.
 
 ---
 

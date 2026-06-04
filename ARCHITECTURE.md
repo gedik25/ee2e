@@ -1,6 +1,6 @@
 # EE2E — Sistem Mimarisi
 
-> **Yaşayan doküman.** Her faz sonunda güncellenir. Son güncelleme: Faz 0 (Hazırlık).
+> **Yaşayan doküman.** Her faz sonunda güncellenir. Son güncelleme: Faz 5 (MLS & TreeKEM ve Platform).
 
 ---
 
@@ -79,32 +79,34 @@
 
 ## 3. Bileşen Sorumlulukları (Faz Bazlı)
 
-### Faz 1 — Skeleton (mevcut hedef)
-- `server/app.py` → Flask + Flask-SocketIO; `/health`, `connect`, `join_room`, `message` event'leri
+### Faz 1 — Skeleton (Tamamlandı)
+- `server/app/server.py` → Flask + Flask-SocketIO; `/health`, `connect`, `join_room`, `message` event'leri
 - `server/Dockerfile`, `docker-compose.yml` → tek komutla up
 - `server/db/schema.sql` → `users`, `key_bundles`, `one_time_prekeys` tabloları (boş, sadece şema)
 - `client/` → Flutter scaffold; bağlantı durumu UI (online/offline/reconnecting); plaintext "merhaba" gönder
 
-### Faz 2 — Identity & Handshake
+### Faz 2 — Identity & Handshake (Tamamlandı)
 - `client/lib/crypto/identity.dart` → IK (Ed25519), SPK (X25519), OPK[] üret
-- `client/lib/crypto/x3dh.dart` → X3DH kütüphanesi
-- `server/api/keys.py` → bundle upload/download REST endpoint'leri
+- `client/lib/crypto/x3dh.dart` → X3DH kütüphanesi (deriveAsInitiator / deriveAsResponder)
+- `server/app/api_keys.py` → bundle upload/download REST endpoint'leri
 
-### Faz 3 — 1:1 E2EE + Multi-device + Local Encrypted History
-- `client/lib/crypto/ratchet.dart` → Double Ratchet
-- `client/lib/crypto/aead.dart` → AES-256-GCM
-- `client/lib/crypto/sesame.dart` → Multi-device session yönetimi
-- `client/lib/storage/sqlcipher.dart` → şifreli yerel mesaj geçmişi
-- `server/sockets/relay.py` → ack-on-delivery + delete; multi-device fanout
+### Faz 3 — 1:1 E2EE Mesajlaşma (Tamamlandı)
+- `client/lib/crypto/double_ratchet.dart` → Double Ratchet state makinesi, skipped keys cache
+- `client/lib/crypto/session.dart` → X3DH ve Double Ratchet oturum entegrasyonu
+- `client/lib/ui/chat_screen.dart` → Şifreli chat ekranı
 
-### Faz 4 — Gruplar + Metadata Hardening
-- `client/lib/crypto/sender_keys.dart` → WhatsApp-tarzı Sender Keys
-- Padding (örn. tüm mesajlar 256-byte multiple'a yuvarlanır)
-- Sealed Sender (gönderici kimliği şifrelenir)
+### Faz 4 — Gruplar + Metadata Hardening (Tamamlandı)
+- `client/lib/crypto/sender_key.dart` → WhatsApp-tarzı Sender Keys grubu şifreleme/çözme
+- `client/lib/crypto/group_session.dart` → Grup oturum yönetimi
+- `client/lib/crypto/padding.dart` (512 byte bloklarına PKCS7 padding)
+- `client/lib/crypto/sealed_sender.dart` (gönderici kimliğini alıcının IK'sı ile şifreleme)
+- `client/lib/ui/group_chat_screen.dart` → Grup sohbet ekranı
 
-### Faz 5 — MLS + Platform
-- `client/lib/crypto/mls/` → TreeKEM tabanlı grup
-- Push notification adaptörleri (APNs, FCM, WNS)
+### Faz 5 — MLS + Platform (Tamamlandı)
+- `client/lib/crypto/tree_kem.dart` → TreeKEM tabanlı grup anahtar yönetimi (MLS benzeri binary tree)
+- `client/lib/crypto/multi_device.dart` → Cihaz oturum yönetimi (`MultiDeviceManager`)
+- `client/lib/core/push_service.dart` + `server/app/push.py` → Push bildirim altyapısı (MVP/Stub)
+- `client/windows/` → Windows platform desteği ve yapılandırması
 
 ---
 

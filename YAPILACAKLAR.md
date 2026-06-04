@@ -1,113 +1,38 @@
-# EE2E — Yapılacaklar
+# EE2E — Yapılacaklar (Teknik Borç & Gelecek Planı)
 
-> Bu belge **henüz yapılmamış veya planlanan** işleri sırayla listeler. Resmi faz tablosu için `PHASES.md` kullanılır.  
-> **Son güncelleme:** Faz 2B–5 beklemede iken yazıldı.
-
----
-
-## Özet: kalan fazlar
-
-| Sıra | Faz | Ad | Kısa hedef |
-|------|-----|-----|------------|
-| 1 | **2B** | X3DH Handshake | İki tarafın aynı `SK`’yı türetmesi; ilk mesaj başlığı; safety number MVP |
-| 2 | **3** | 1:1 E2EE Mesajlaşma | Double Ratchet + AES-256-GCM; sunucuya sadece ciphertext |
-| 3 | **4** | Grup + Metadata Hardening | Sender Keys, padding, sealed sender |
-| 4 | **5** | MLS + Platform | TreeKEM / MLS tarzı grup, push, optimizasyon |
+> Bu belge **tüm ana fazlar (Faz 0 - Faz 5) tamamlandıktan sonra** kalan küçük teknik borçları ve üretim (production) ortamı için planlanan geliştirmeleri listeler.
 
 ---
 
-## Faz 2B — X3DH Handshake
+## Proje Durumu: Tüm Fazlar Tamamlandı!
 
-**Bağımlılık:** Faz 2A (bundle üretimi ve dağıtımı) tamam.
-
-### Hedef
-
-- Alice, Bob’un public bundle’ını kullanarak **ortak gizli `SK`** türetsin; Bob aynı `SK`’yı bağımsız hesaplasın.
-- İlk oturum için **header** (ör. gönderen ephemeral, SPK/OPK id’leri) tanımlansın.
-- **Safety number / fingerprint** MVP (ör. `SHA-256(IK_a || IK_b)` veya eşdeğer karşılaştırılabilir gösterim).
-
-### Örnek iş maddeleri
-
-- [ ] `lib/crypto/x3dh.dart` — `deriveAsInitiator()`, `deriveAsResponder()` (HKDF-SHA-256 ile `SK`).
-- [ ] `lib/crypto/x3dh_header.dart` — initial message header yapısı.
-- [ ] Birim testler: `SK_alice == SK_bob`; OPK yokken (SPK-only) eşitlik; geçersiz SPK imzasında hata.
-- [ ] `lib/ui/safety_number_screen.dart` (veya mevcut ekrana entegre) — kullanıcıya gösterilebilir fingerprint.
-
-### Kapsam dışı (bilinçli)
-
-- Mesajın tam şifreli taşınması → **Faz 3** (Double Ratchet).
-- Multi-device oturum birleştirme → **Faz 3** (Sesame vb. plan).
-- Bulut yedekleme → **Faz 5** plan notlarında.
+| Sıra | Faz | Ad | Durum |
+|------|-----|-----|-------|
+| 1 | **0** | Hazırlık & Mimari Dokümantasyonu | ✅ Tamamlandı |
+| 2 | **1** | Altyapı + Dockerize Backend | ✅ Tamamlandı |
+| 3 | **2A** | Key Bundle Dağıtımı | ✅ Tamamlandı |
+| 4 | **2B** | X3DH Handshake | ✅ Tamamlandı |
+| 5 | **3** | 1:1 E2EE Mesajlaşma (Double Ratchet) | ✅ Tamamlandı |
+| 6 | **4** | Grup Sohbeti & Metadata Sertleştirme (Sealed Sender) | ✅ Tamamlandı |
+| 7 | **5** | MLS (TreeKEM) & Çoklu Platform Desteği | ✅ Tamamlandı |
 
 ---
 
-## Faz 3 — 1:1 uçtan uca şifreli mesajlaşma
+## Kalan Teknik Borçlar ve Üretim (Production) Planı
 
-**Bağımlılık:** Faz 2B (`SK` ve oturum başlatma).
+Ana fazlar tamamlanmış olsa da, sistemi tam anlamıyla güvenli ve ölçeklenebilir bir üretim ortamına taşımak için yapılması planlanan iyileştirmeler aşağıdadır:
 
-### Hedef
+### 1. Güçlü Kimlik Doğrulama (Socket Auth)
+- [ ] Bağlantı anında sadece `client_id` almak yerine, istemcinin Identity Sign Key'i (`IK_sig`) ile imzalanmış tek kullanımlık bir challenge-response auth akışının kurulması.
 
-- Socket.IO üzerinden taşınan `envelope` gövdesi **AEAD ile şifreli** (hedef: AES-256-GCM).
-- **Double Ratchet** ile forward secrecy ve mesaj sırası güvenliği.
-- Sunucu mesaj içeriğini çözemez (opaque blob); mevcut relay/ack mimarisi korunur veya sıkılaştırılır.
+### 2. Kalıcı / Ölçeklenebilir Kuyruk (Redis)
+- [ ] Sunucudaki in-memory ephemeral kuyruğun, sunucu yeniden başlatıldığında verilerin kaybolmaması ve yatay ölçekleme (horizontal scaling) yapılabilmesi için Redis tabanlı bir kuyruk mimarisine taşınması.
 
-### Planlı / mimaride geçen ekler
+### 3. Web Platformu Güvenlik İyileştirmesi
+- [ ] Flutter web platformunda `flutter_secure_storage` IndexedDB kullandığından, tarayıcıda private key'lerin daha güvenli saklanabilmesi için WebCrypto veya donanımsal koruma köprülerinin araştırılıp entegre edilmesi.
 
-- Multi-device (Sesame veya eşdeğer strateji).
-- Yerel şifreli mesaj geçmişi (ör. SQLCipher), bulutta plaintext yedek yok.
-- Ephemeral kuyruk: ölçek için **Redis** (TTL, çok instance) değerlendirmesi (`PHASES.md` retrospektif borç).
+### 4. Push Bildirimlerinin Canlıya Alınması
+- [ ] İstemci ve sunucudaki mock/stub push servislerinin gerçek FCM (Firebase Cloud Messaging) veya APNs (Apple Push Notification service) ile bağlanması.
 
----
-
-## Faz 4 — Grup ve metadata sertleştirme
-
-**Bağımlılık:** Faz 3’te stabil 1:1 E2EE.
-
-### Hedef (özet)
-
-- Grup mesajlaşması için **Sender Keys** (veya seçilen grup modeli).
-- **Padding** ile trafik analizi zorlaştırma.
-- **Sealed sender** benzeri metadata koruması (tasarıma göre aşamalı).
-
-### Not
-
-- `ARCHITECTURE.md` içinde MLS’e geçişin Faz 4 grup yapısını etkileyebileceği notu var; Faz 4 başında migration kararı netleştirilmeli.
-
----
-
-## Faz 5 — MLS ve platform
-
-**Bağımlılık:** Faz 4 veya paralel planlama.
-
-### Hedef (özet)
-
-- **MLS / TreeKEM** tarzı grup anahtar yönetimi (mimari hedef).
-- Push bildirimleri (APNs, FCM, WNS vb.).
-- Çok platformlu üretim sertleştirmesi (özellikle web anahtar depolama stratejisi).
-
----
-
-## Faz 1–2A’dan taşınan teknik borç (çapraz işler)
-
-Bunlar ayrı bir “faz” değil; ilgili fazda ele alınmalı:
-
-| Konu | Not |
-|------|-----|
-| Socket auth | `client_id` ile basit auth → güçlü kimlik / imza (2B sonrası veya 3 ile uyumlu) |
-| In-memory kuyruk | Restart’ta kayıp; yatay ölçek yok → Redis (Faz 3 civarı) |
-| Çok sekme / fanout | Aynı kullanıcıda dedup ve cihaz modeli → Faz 3 multi-device |
-| Web güvenliği | `flutter_secure_storage` web’de sınırlı → prod web stratejisi (Faz 3–5) |
-| Flutter web prod | Service worker / önbellek stratejisi (isteğe bağlı iyileştirme) |
-| Opsiyonel CI | GitHub Actions ile `docker build` smoke (`PHASES.md` [ ]) |
-
----
-
-## Bu belgeyi güncellerken
-
-1. Bir faz bittiğinde ilgili maddeleri `YAPILANLAR.md`’ye taşıyın (veya `PHASES.md` tablosunu güncelleyin).
-2. `PHASES.md` tek doğruluk kaynağı olarak checkbox’ları güncel tutun.
-3. Mimari değişikliklerde `SISTEM-MIMARISI.md` ve gerekiyorsa `ARCHITECTURE.md` senkronize edilsin.
-
----
-
-*Vizyon diyagramı ve uzun vadeli bileşen listesi: `ARCHITECTURE.md`.*
+### 5. Sürekli Entegrasyon (CI/CD)
+- [ ] GitHub Actions veya GitLab CI ile otomatik docker build smoke testleri ve pytest/flutter test birim testlerinin çalıştırılması.

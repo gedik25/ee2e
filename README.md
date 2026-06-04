@@ -18,16 +18,21 @@ ee2e/
 
 ## Mevcut Durum
 
-**Faz 0 (Hazırlık):** ✅ Mimari ve faz planı dokümante edildi.
-**Faz 1 (Altyapı + Dockerize Backend):** ⏳ Sıradaki adım.
+*   **Faz 0 (Hazırlık):** ✅ Mimari ve faz planı dokümante edildi.
+*   **Faz 1 (Altyapı + Dockerize Backend):** ✅ Tamamlandı.
+*   **Faz 2A (Key Bundle Dağıtımı):** ✅ Tamamlandı.
+*   **Faz 2B (X3DH Handshake):** ✅ Tamamlandı.
+*   **Faz 3 (1:1 E2EE - Double Ratchet):** ✅ Tamamlandı.
+*   **Faz 4 (Grup Sohbeti & Metadata Hardening):** ✅ Tamamlandı.
+*   **Faz 5 (MLS/TreeKEM & Platform):** ✅ Tamamlandı.
 
-Detaylar için `PHASES.md` dosyasına bakın.
+Detaylar için `PHASES.md` ve `YAPILANLAR.md` dosyalarına bakın.
 
 ## Teknoloji Yığını
 
 | Katman              | Teknoloji                                          |
 |---------------------|----------------------------------------------------|
-| İstemci             | Flutter (Dart) + `pointycastle` + `flutter_secure_storage` |
+| İstemci             | Flutter (Dart) + `cryptography` + `flutter_secure_storage` |
 | Gerçek-zamanlı      | Socket.IO (WebSocket Secure / `wss://`)           |
 | Sunucu              | Python 3.12 + Flask + Flask-SocketIO              |
 | Veritabanı          | PostgreSQL 16 (sadece **public** key bundle'lar)   |
